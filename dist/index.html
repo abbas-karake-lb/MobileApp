@@ -9,11 +9,11 @@
 <header><div class="brand"><span>♬</span>Pocket Piano</div><div class="edition">A LITTLE ROOM FOR MUSIC</div></header>
 <main><div class="intro"><div><h1>Make a little music.</h1><p>Touch the keys. Find a melody. Stay a while.</p></div><output class="live-note" id="notes" aria-label="Playing notes">—</output></div>
 <section class="instrument" aria-label="Interactive piano">
-<div class="controls"><div class="control"><span class="control-label">Octave</span><div class="octave"><button class="small" id="down" aria-label="Lower octave">−</button><output id="octave">4–5</output><button class="small" id="up" aria-label="Higher octave">+</button></div></div><div class="control"><button class="toggle" id="sustain" aria-pressed="false">Sustain</button></div><label class="control"><span class="control-label">Volume</span><input id="volume" aria-label="Volume" type="range" min="0" max="100" value="65"></label></div>
+<div class="controls"><button class="toggle" id="enable-sound" type="button">Enable sound</button><div class="control"><span class="control-label">Octave</span><div class="octave"><button class="small" id="down" aria-label="Lower octave">−</button><output id="octave">4–5</output><button class="small" id="up" aria-label="Higher octave">+</button></div></div><div class="control"><button class="toggle" id="sustain" aria-pressed="false">Sustain</button></div><label class="control"><span class="control-label">Volume</span><input id="volume" aria-label="Volume" type="range" min="0" max="100" value="65"></label></div>
 <div class="keybed" id="keybed"><div class="white-keys" id="whites"></div></div>
 <div class="instrument-footer"><span>POCKET / 01</span><span>POLYPHONIC · 2 OCTAVES</span></div>
 </section>
-<div class="status" id="status" role="status">Tap a key to start playing.</div>
+<div class="status" id="status" role="status">Tap Enable sound once, then play the keys.</div>
 <div class="instructions"><p><strong>On your phone</strong><br>Tap with multiple fingers to play chords.<br>Turn sideways for wider keys.</p><p><strong>On your keyboard</strong><br>White keys: <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> <kbd>F</kbd> <kbd>G</kbd> <kbd>H</kbd> <kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd> <kbd>;</kbd> <kbd>'</kbd> <kbd>]</kbd> <kbd>Enter</kbd> <kbd>\</kbd><br>Hold <kbd>Space</kbd> for sustain. Use <kbd>←</kbd> <kbd>→</kbd> to change octaves.</p></div>
 </main><footer>No downloads. Just you and the keys.</footer>
 <script>
@@ -23,11 +23,48 @@ const shortcuts=['KeyA','KeyW','KeyS','KeyE','KeyD','KeyF','KeyT','KeyG','KeyY',
 const labels=['A','W','S','E','D','F','T','G','Y','H','U','J','K','O','L','P',';','\'','[',']','=','↵','⌫','\\'];
 let octave=4,ctx,master,sustain=false,pedal=false;const voices=new Map(),held=new Map(),buttons=new Map(),pointers=new Map();
 const el=id=>document.getElementById(id);
-function audio(){if(!ctx){const AC=window.AudioContext||window.webkitAudioContext;if(!AC)throw new Error('Audio is not supported in this browser.');ctx=new AC();master=ctx.createGain();master.gain.value=Number(el('volume').value)/100*.55;const compressor=ctx.createDynamicsCompressor();master.connect(compressor);compressor.connect(ctx.destination);}if(ctx.state!=='running')ctx.resume().catch(()=>{el('status').textContent='Tap a key again to enable audio.';});}
-function play(midi){audio();if(voices.has(midi))stop(midi,.025);const now=ctx.currentTime,amp=ctx.createGain();amp.connect(master);amp.gain.setValueAtTime(0,now);amp.gain.linearRampToValueAtTime(.23,now+.008);amp.gain.exponentialRampToValueAtTime(.09,now+.22);amp.gain.exponentialRampToValueAtTime(.001,now+4.5);const oscs=[];[1,2,3,4,6].forEach((h,i)=>{const osc=ctx.createOscillator(),gain=ctx.createGain();osc.type='sine';osc.frequency.value=440*Math.pow(2,(midi-69)/12)*h;gain.gain.value=[1,.38,.16,.075,.025][i];osc.connect(gain);gain.connect(amp);osc.start(now);osc.stop(now+5);oscs.push(osc);});const voice={amp,oscs};voices.set(midi,voice);oscs[0].onended=()=>{amp.disconnect();if(voices.get(midi)===voice)voices.delete(midi);};}
+function audioStatus(){
+  const running=ctx&&ctx.state==='running';
+  el('enable-sound').textContent=running?'Test sound':'Enable sound';
+  el('status').textContent=running?'Audio enabled. No sound? Raise media volume and check your Bluetooth output.':'Tap Enable sound to start or resume audio.';
+}
+async function audio(){
+  // Safari otherwise uses the ambient channel, which follows the iPhone mute switch.
+  try{if(navigator.audioSession)navigator.audioSession.type='playback';}catch{}
+  if(!ctx||ctx.state==='closed'){
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(!AC)throw new Error('Audio is not supported in this browser.');
+    ctx=new AC();master=ctx.createGain();master.gain.value=Number(el('volume').value)/100*.55;
+    const compressor=ctx.createDynamicsCompressor();master.connect(compressor);compressor.connect(ctx.destination);
+    ctx.onstatechange=audioStatus;
+  }
+  if(ctx.state!=='running'){
+    el('status').textContent='Enabling audio…';
+    // Call resume inside the original user gesture; do not schedule notes until it resolves.
+    let timeout;
+    try{await Promise.race([ctx.resume(),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('Tap Enable sound again. If needed, turn off Silent Mode and raise media volume.')),2500);})]);}
+    finally{clearTimeout(timeout);}
+  }
+  if(ctx.state!=='running')throw new Error('Audio is paused. Tap Enable sound again.');
+  audioStatus();
+}
+function play(midi){if(!ctx||ctx.state!=='running')return;if(voices.has(midi))stop(midi,.025);const now=ctx.currentTime,amp=ctx.createGain();amp.connect(master);amp.gain.setValueAtTime(0,now);amp.gain.linearRampToValueAtTime(.23,now+.008);amp.gain.exponentialRampToValueAtTime(.09,now+.22);amp.gain.exponentialRampToValueAtTime(.001,now+4.5);const oscs=[];[1,2,3,4,6].forEach((h,i)=>{const osc=ctx.createOscillator(),gain=ctx.createGain();osc.type='sine';osc.frequency.value=440*Math.pow(2,(midi-69)/12)*h;gain.gain.value=[1,.38,.16,.075,.025][i];osc.connect(gain);gain.connect(amp);osc.start(now);osc.stop(now+5);oscs.push(osc);});const voice={amp,oscs};voices.set(midi,voice);oscs[0].onended=()=>{amp.disconnect();if(voices.get(midi)===voice)voices.delete(midi);};}
 function stop(midi,release=.15){const v=voices.get(midi);if(!v||!ctx)return;const t=ctx.currentTime;v.amp.gain.cancelAndHoldAtTime? v.amp.gain.cancelAndHoldAtTime(t):(v.amp.gain.cancelScheduledValues(t),v.amp.gain.setValueAtTime(Math.max(.001,v.amp.gain.value),t));v.amp.gain.exponentialRampToValueAtTime(.0001,t+release);v.oscs.forEach(o=>{try{o.stop(t+release+.03)}catch{}});voices.delete(midi);}
 function refresh(){const active=new Set(held.values());buttons.forEach((b,m)=>b.classList.toggle('active',active.has(m)));el('notes').textContent=[...active].sort((a,b)=>a-b).map(m=>names[m%12]+(Math.floor(m/12)-1)).join(' · ')||'—';}
-function press(id,midi){if(held.has(id))return;try{play(midi);held.set(id,midi);refresh();el('status').textContent='Ready to play.';}catch(e){el('status').textContent=e.message;}}
+function press(id,midi){
+  if(held.has(id))return;
+  held.set(id,midi);refresh();
+  if(ctx&&ctx.state==='running'){play(midi);return;}
+  audio().then(()=>{if(held.get(id)===midi)play(midi);}).catch(e=>{release(id);el('status').textContent=e.message;});
+}
+el('enable-sound').onclick=async()=>{
+  try{
+    await audio();
+    if(Number(el('volume').value)===0){el('volume').value='65';master.gain.setTargetAtTime(.65*.55,ctx.currentTime,.02);}
+    play(72);const testVoice=voices.get(72);
+    setTimeout(()=>{if(voices.get(72)===testVoice&&![...held.values()].includes(72))stop(72,.2);},350);
+  }catch(e){el('status').textContent=e.message;}
+};
 function release(id){const m=held.get(id);held.delete(id);if(m!==undefined&&![...held.values()].includes(m)&&!sustain&&!pedal)stop(m);refresh();}
 function releaseTail(){if(!sustain&&!pedal)for(const m of voices.keys())if(![...held.values()].includes(m))stop(m,.25);}
 function silence(){held.clear();pointers.clear();pedal=false;for(const m of voices.keys())stop(m,.04);refresh();}
@@ -38,5 +75,5 @@ el('keybed').addEventListener('pointerdown',e=>{const b=e.target.closest('.key')
 el('keybed').addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;const b=document.elementFromPoint(e.clientX,e.clientY)?.closest('.key');const m=b?Number(b.dataset.midi):null;if(m===pointers.get(e.pointerId))return;release('p'+e.pointerId);pointers.set(e.pointerId,m);if(m!==null)press('p'+e.pointerId,m);});
 ['pointerup','pointercancel','lostpointercapture'].forEach(type=>el('keybed').addEventListener(type,e=>{release('p'+e.pointerId);pointers.delete(e.pointerId);}));
 window.addEventListener('keydown',e=>{if(e.ctrlKey||e.metaKey||e.altKey||(['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)||document.activeElement.tagName==='BUTTON'&&['Space','Enter'].includes(e.code)))return;const i=shortcuts.indexOf(e.code);if(i>=0||['Space','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault();if(e.repeat)return;if(e.code==='Space'){pedal=true;return;}if(e.code==='ArrowLeft')return shift(-1);if(e.code==='ArrowRight')return shift(1);if(i>=0)press('k'+e.code,(octave+1)*12+i);});
-window.addEventListener('keyup',e=>{if(e.code==='Space'){pedal=false;releaseTail();}release('k'+e.code);});window.addEventListener('blur',silence);document.addEventListener('visibilitychange',()=>{if(document.hidden)silence();});render();
+window.addEventListener('keyup',e=>{if(e.code==='Space'){pedal=false;releaseTail();}release('k'+e.code);});window.addEventListener('blur',silence);document.addEventListener('visibilitychange',()=>{if(document.hidden){silence();if(ctx&&ctx.state==='running')ctx.suspend().catch(()=>{});}else if(ctx)audioStatus();});render();
 </script></body></html>
